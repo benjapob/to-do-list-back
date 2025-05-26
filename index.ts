@@ -7,7 +7,7 @@ import dotenv from 'dotenv';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { SocketClass } from './classes/socket.class';
-import mongoose from 'mongoose';
+const sqlite3 = require('sqlite3').verbose();
 import Turno from './models/turno.model';
 
 // Cargar variables de entorno
@@ -16,7 +16,6 @@ dotenv.config();
 // Validar variables de entorno
 const PORT = parseInt(process.env.PORT || '3003', 10);
 const ENV = process.env.ENV || 'DEV';
-const MONGO_URI = process.env.MONGO_URI || '';
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(',') || []; // ej., "https://frontend.com,https://another.com" en .env
 
 class Server {
@@ -183,10 +182,44 @@ class Server {
   }
 
   private configureDB() {
-    // Aquí puedes configurar tu conexión a la base de datos, por ejemplo, MongoDB
-    mongoose.connect(MONGO_URI)
-      .then(() => console.log('MongoDB connected'))
-      .catch((err) => console.error('MongoDB connection error:', err));    
+    // Aquí puedes configurar tu conexión a la base de datos
+    const db = new sqlite3.Database('./database.db', (err: { message: any; }) => {
+        if (err) {
+            console.error('Error al conectar con la base de datos:', err.message);
+        } else {
+            console.log('Conectado a la base de datos SQLite.');
+        }
+    });
+
+    // Crear la tabla si no existe
+    db.serialize(() => {
+        db.run(`CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            titulo TEXT NOT NULL CHECK (length(titulo) <= 100),
+            descripcion TEXT CHECK (length(titulo) <= 500),
+            status TEXT DEFAULT 'pendiente',
+            fechaCreacion DATETIME DEFAULT CURRENT_TIMESTAMP,
+            fechaActualizacion DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`, (err: any) => {
+            if (err) {
+                console.error('Error al crear la tabla tasks:', err.message);
+            }
+        });
+    });
+
+    // Crear el trigger para actualizar la fecha de modificación
+    db.run(`CREATE TRIGGER IF NOT EXISTS actualizar_fecha
+            AFTER UPDATE ON tasks
+            FOR EACH ROW
+            BEGIN
+                UPDATE tasks
+                SET fechaActualizacion = CURRENT_TIMESTAMP
+                WHERE id = OLD.id;
+            END;`, (err:any) => {
+        if (err) {
+            console.error('Error al crear el trigger:', err.message);
+        }
+    });
   }
 
   private configureErrorHandling() {
@@ -204,7 +237,7 @@ class Server {
   public start() {
     // Iniciar el servidor
     this.httpServer.listen(this.port, () => {
-      console.log(`Server listening on port ${this.port}`);
+      console.log(`Servidor escuchando en el puerto ${this.port}`);
     });
     this.httpServer.setTimeout(20 * 60 * 1000); // 20 minutes
   }
