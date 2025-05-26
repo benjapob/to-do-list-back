@@ -1,5 +1,6 @@
 node_modules
 *.dockerfile
+*.db
 *.dockerignore
 *.Identifier
 *.pem

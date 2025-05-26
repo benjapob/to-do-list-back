@@ -16,10 +16,11 @@ dotenv.config();
 // Validar variables de entorno
 const PORT = parseInt(process.env.PORT || '3003', 10);
 const ENV = process.env.ENV || 'DEV';
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(',') || []; // ej., "https://frontend.com,https://another.com" en .env
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(',') || [];
 
 class Server {
   public app: express.Application;
+  private db:any; // Base de datos SQLite
   private httpServer: http.Server;
   public io: socketIO.Server;
   private port: number;
@@ -79,47 +80,51 @@ class Server {
 
   private configureRoutes() {
     // Aquí puedes agregar tus rutas
-    this.app.get('/getTurnos', (req: Request, res: Response) => {
-      Turno.find({estado:{$ne:'Cancelado'}}).then((turnos) => {
-        res.json({ ok: true, turnos });
-      }).catch((err) => {
-        console.error(err);
-        res.json({ ok: false, error: 'Error al obtener los turnos' });
+    this.app.get('/tasks', (req: Request, res: Response) => {
+      // Obtener todas las tareas
+      const sql = `SELECT * FROM tasks`;
+      this.db.all(sql, [], (err:any, rows:any) => {
+          if (err) {
+              return res.status(400).json({ error: err.message });
+          }
+          res.json(rows);
       });
     });
 
     
-    this.app.post('/createTurno', (req: Request, res: Response) => {
+    this.app.post('/tasks', (req: Request, res: Response) => {
       try {
-        let inicioDia = moment().startOf('day').toDate();
-        let finDia = moment().endOf('day').toDate();
-        let numeroTurno:string = '1';
-        Turno.find({createdAt:{$gt:inicioDia, $lt: finDia}}).sort({createdAt:1}).then((turnos) => {
-          if (turnos.length > 0) {
-            
-            const ultimoTurno = turnos[turnos.length - 1];
-            const nuevoNumeroTurno = parseInt(ultimoTurno.numeroTurno) + 1;
-            numeroTurno = nuevoNumeroTurno.toString();
-          } 
-
-          Turno.create({
-            numeroTurno,
-            motivo: req.body.motivo,
-            prioridad: req.body.prioridad,
-            horaRegistro: new Date(),
-            consultorio: req.body.consultorio,
-            medico: req.body.medico,
-            paciente: req.body.paciente
-          }).then((turno) => {
-            SocketClass.updateFilaVirtual(this.io);
-            res.json({ ok: true, turno });
-          }).catch((err) => {
-            console.error(err);
-            res.json({ ok: false, error: 'Error al crear el turno' });
-          });
+        // Crear una nueva tarea
+        const { titulo, descripcion} = req.body;
+        // Validar campos requeridos
+        if (!titulo || !descripcion) {
+            res.status(400).json({ error: 'Faltan campos requeridos' });
+            return;
+        }
+        // Validar longitud de los campos
+        if (titulo.length > 100 || descripcion.length > 500) {
+            res.status(400).json({ error: 'Longitud de campos excedida' });
+            return;
+        }
+        // Sanitizar entradas
+        const sanitizedTitulo = this.sanitizeInput(titulo);
+        const sanitizedDescripcion = this.sanitizeInput(descripcion);
+        // Insertar la tarea en la base de datos
+        const sql = `INSERT INTO tasks (titulo, descripcion) VALUES (?, ?)`;
+        this.db.run(sql, [sanitizedTitulo, sanitizedDescripcion], function(err: any) {
+            if (err) {
+                res.status(400).json({ error: err.message });
+                return;
+            } else {
+                res.status(201).json({ message: 'Tarea creada correctamente' });
+                return;
+            }
         });
       } catch (error) {
-        console.error(error);        
+        // Manejo de errores
+        console.error(error);
+        res.status(500).json({ error: 'Error interno del servidor' });
+        return;
       }
     });
     
@@ -183,7 +188,7 @@ class Server {
 
   private configureDB() {
     // Aquí puedes configurar tu conexión a la base de datos
-    const db = new sqlite3.Database('./database.db', (err: { message: any; }) => {
+    this.db = new sqlite3.Database('./database.db', (err: { message: any; }) => {
         if (err) {
             console.error('Error al conectar con la base de datos:', err.message);
         } else {
@@ -192,8 +197,8 @@ class Server {
     });
 
     // Crear la tabla si no existe
-    db.serialize(() => {
-        db.run(`CREATE TABLE IF NOT EXISTS tasks (
+    this.db.serialize(() => {
+        this.db.run(`CREATE TABLE IF NOT EXISTS tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             titulo TEXT NOT NULL CHECK (length(titulo) <= 100),
             descripcion TEXT CHECK (length(titulo) <= 500),
@@ -208,7 +213,7 @@ class Server {
     });
 
     // Crear el trigger para actualizar la fecha de modificación
-    db.run(`CREATE TRIGGER IF NOT EXISTS actualizar_fecha
+    this.db.run(`CREATE TRIGGER IF NOT EXISTS actualizar_fecha
             AFTER UPDATE ON tasks
             FOR EACH ROW
             BEGIN
@@ -232,6 +237,11 @@ class Server {
     this.io.on('error', (err) => {
       console.error('Socket.IO error:', err);
     });
+  }
+
+  private sanitizeInput(input: string): string {
+    // Sanitizar la entrada para evitar inyecciones SQL
+    return input.replace(/'/g, "''").trim();
   }
 
   public start() {
