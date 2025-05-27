@@ -8,13 +8,12 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { SocketClass } from './classes/socket.class';
 const sqlite3 = require('sqlite3').verbose();
-import Turno from './models/turno.model';
 
 // Cargar variables de entorno
 dotenv.config();
 
 // Validar variables de entorno
-const PORT = parseInt(process.env.PORT || '3003', 10);
+const PORT = parseInt(process.env.PORT || '3000', 10);
 const ENV = process.env.ENV || 'DEV';
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(',') || [];
 
@@ -79,9 +78,8 @@ class Server {
   }
 
   private configureRoutes() {
-    // Aquí puedes agregar tus rutas
+    // Obtener todas las tareas
     this.app.get('/tasks', (req: Request, res: Response) => {
-      // Obtener todas las tareas
       const sql = `SELECT * FROM tasks`;
       this.db.all(sql, [], (err:any, rows:any) => {
           if (err) {
@@ -91,14 +89,19 @@ class Server {
       });
     });
 
-    
+    // Crear una nueva tarea
     this.app.post('/tasks', (req: Request, res: Response) => {
       try {
-        // Crear una nueva tarea
-        const { titulo, descripcion} = req.body;
+        const { titulo } = req.body;
+        const descripcion = req.body.descripcion || '';
+        const status = req.body.status || '';
         // Validar campos requeridos
-        if (!titulo || !descripcion) {
-            res.status(400).json({ error: 'Faltan campos requeridos' });
+        if (!titulo) {
+            res.status(400).json({ error: 'El título es requerido' });
+            return;
+        }
+        if (status && !['pendiente', 'en_proceso', 'completada'].includes(status)) {
+            res.status(400).json({ error: 'Estado inválido' });
             return;
         }
         // Validar longitud de los campos
@@ -109,14 +112,18 @@ class Server {
         // Sanitizar entradas
         const sanitizedTitulo = this.sanitizeInput(titulo);
         const sanitizedDescripcion = this.sanitizeInput(descripcion);
+        const sanitizedStatus = this.sanitizeInput(status);
         // Insertar la tarea en la base de datos
-        const sql = `INSERT INTO tasks (titulo, descripcion) VALUES (?, ?)`;
-        this.db.run(sql, [sanitizedTitulo, sanitizedDescripcion], function(err: any) {
+        const sql = `INSERT INTO tasks (titulo, descripcion, status) VALUES (?, ?, ?)`;
+        this.db.run(sql, [sanitizedTitulo, sanitizedDescripcion, sanitizedStatus], function(err: any) {
             if (err) {
                 res.status(400).json({ error: err.message });
                 return;
             } else {
-                res.status(201).json({ message: 'Tarea creada correctamente' });
+                res.status(201).json({ message: 'Tarea creada correctamente', id: this.lastID });
+                // Actualizar fila virtual
+                SocketClass.updateTasks(this.io);
+                console.log('Fila virtual actualizada');
                 return;
             }
         });
@@ -127,61 +134,78 @@ class Server {
         return;
       }
     });
-    
-    this.app.post('/deleteTurno', (req: Request, res: Response) => {
+
+    // Actualizar el estado de una tarea
+    this.app.put('/tasks', (req: Request, res: Response) => {
       try {
-        Turno.findOneAndUpdate({_id:req.body.id}, {$set:{estado:'Cancelado'}}, {new:true}).then((turno) => {
-          if (turno) {
-            res.json({ ok: true, turno});
-            SocketClass.updateFilaVirtual(this.io);
-          } else {
-            res.json({ ok: false, error: 'Error al actualizar turno' });
-          }
-        }).catch((err) => {
-          console.error(err);
-          res.json({ ok: false, error: 'Error al actualizar turno' });
+        const id = req.query.id;
+        const {status} = req.body;
+        // Validar campos requeridos
+        if (!id) {
+            res.status(400).json({ error: 'El ID es requerido' });
+            return;
+        }
+        if (!status || !['pendiente', 'en_proceso', 'completada'].includes(status)) {
+            res.status(400).json({ error: 'Estado inválido' });
+            return;
+        }
+        const sanitizedStatus = this.sanitizeInput(status);
+        // Insertar la tarea en la base de datos
+        const sql = `UPDATE tasks SET status = ? WHERE id = ?`;
+        this.db.run(sql, [sanitizedStatus, id], function(err: any) {
+            if (err) {
+                res.status(400).json({ error: err.message });
+                return;
+            } else if (this.changes === 0) {
+                res.status(404).json({ error: 'Tarea no encontrada' });
+                return;
+            } else {
+                res.status(201).json({ message: 'Tarea actualizada correctamente', id: id, status: sanitizedStatus });
+                // Actualizar fila virtual
+                SocketClass.updateTasks(this.io);
+                console.log('Fila virtual actualizada');
+                return;
+            }
         });
         
       } catch (error) {
           console.error(error);
-          res.json({ ok: false, error: 'Error al actualizar turno' });
+          res.json({ error: 'Error interno del servidor' });
       }
     });
-
-    this.app.post('/updateTurno', (req: Request, res: Response) => {
+    
+    // Eliminar un turno
+    this.app.delete('/tasks', (req: Request, res: Response) => {
       try {
-        let estado:string;
-        switch (req.body.estado) {
-          case 'espera':
-            estado = 'En espera'
-            break;
-          case 'atencion':
-            estado = 'En atención'
-            
-            break;
-          case 'finalizado':
-            estado = 'Finalizado'
-            
-            break;
-          default:
-            estado = 'En espera'
-            break;
+        // Eliminar un turno
+        const id = req.query.id;
+        // Validar campos requeridos
+        if (!id) {
+            res.status(400).json({ error: 'El ID es requerido' });
+            return;
         }
-        Turno.findOneAndUpdate({_id:req.body.id}, {$set:{estado:estado}}, {new:true}).then((turno) => {
-          if (turno) {
-            res.json({ ok: true, turno});
-            SocketClass.updateFilaVirtual(this.io);
-          } else {
-            res.json({ ok: false, error: 'Error al actualizar turno' });
-          }
-        }).catch((err) => {
-          console.error(err);
-          res.json({ ok: false, error: 'Error al actualizar turno' });
+        // Sanitizar entrada
+        const sanitizedId = this.sanitizeInput(id as string);
+        // Eliminar la tarea de la base de datos
+        const sql = `DELETE FROM tasks WHERE id = ?`;
+        this.db.run(sql, [sanitizedId], function(err: any) {
+            if (err) {
+                res.status(400).json({ error: err.message });
+                return;
+            } else if (this.changes === 0) {
+                res.status(404).json({ error: 'Tarea no encontrada' });
+                return;
+            } else {
+                res.status(200).json({ message: 'Tarea eliminada correctamente', id: sanitizedId });
+                // Actualizar fila virtual
+                SocketClass.updateTasks(this.io);
+                console.log('Fila virtual actualizada');
+                return;
+            }
         });
-        
       } catch (error) {
           console.error(error);
-          res.json({ ok: false, error: 'Error al actualizar turno' });
+          res.json({ ok: false, error: 'Error interno del servidor' });
       }
     });
   }
@@ -202,7 +226,7 @@ class Server {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             titulo TEXT NOT NULL CHECK (length(titulo) <= 100),
             descripcion TEXT CHECK (length(titulo) <= 500),
-            status TEXT DEFAULT 'pendiente',
+            status TEXT DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'en_proceso', 'completada')),
             fechaCreacion DATETIME DEFAULT CURRENT_TIMESTAMP,
             fechaActualizacion DATETIME DEFAULT CURRENT_TIMESTAMP
         )`, (err: any) => {
