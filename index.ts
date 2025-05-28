@@ -6,7 +6,6 @@ import socketIO from 'socket.io';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { SocketClass } from './classes/socket.class';
 const sqlite3 = require('sqlite3').verbose();
 
 // Cargar variables de entorno
@@ -34,7 +33,28 @@ class Server {
         credentials: true,
       },
     });
-    SocketClass.escucharSocket(this.io); //Inicializar el socket
+
+    // Cuando se conecta un cliente, enviar las tareas en base
+    this.io.on("connection", (socket: {emit(arg0: string, arg1: string): unknown; id: any; on: (arg0: string, arg1: () => void) => void; }) => {
+      console.log("Usuario conectado:", socket.id);
+      const sql = `SELECT * FROM tasks`;
+      this.db.all(sql, [], (err:any, rows:any) => {
+          if (err) {
+              console.error('Error al obtener tareas:', err);
+              return;
+          }
+          this.io?.emit('tareasInicial', {
+              tasks: rows.map((row:any) => ({
+                  id: row.id,
+                  titulo: row.titulo,
+                  description: row.description,
+                  status: row.status,
+                  fechaCreacion: moment(row.fechaCreacion).format('YYYY-MM-DD HH:mm:ss'),
+                  fechaActualizacion: moment(row.fechaActualizacion).format('YYYY-MM-DD HH:mm:ss')
+              }))
+          } as any);
+      });
+    });
 
     this.configureMiddleware();
     this.configureRoutes();
@@ -93,7 +113,7 @@ class Server {
     this.app.post('/tasks', (req: Request, res: Response) => {
       try {
         const { titulo } = req.body;
-        const descripcion = req.body.descripcion || '';
+        const description = req.body.description || '';
         const status = req.body.status || '';
         // Validar campos requeridos
         if (!titulo) {
@@ -105,25 +125,34 @@ class Server {
             return;
         }
         // Validar longitud de los campos
-        if (titulo.length > 100 || descripcion.length > 500) {
+        if (titulo.length > 100 || description.length > 500) {
             res.status(400).json({ error: 'Longitud de campos excedida' });
             return;
         }
         // Sanitizar entradas
         const sanitizedTitulo = this.sanitizeInput(titulo);
-        const sanitizedDescripcion = this.sanitizeInput(descripcion);
+        const sanitizeddescription = this.sanitizeInput(description);
         const sanitizedStatus = this.sanitizeInput(status);
         // Insertar la tarea en la base de datos
-        const sql = `INSERT INTO tasks (titulo, descripcion, status) VALUES (?, ?, ?)`;
-        this.db.run(sql, [sanitizedTitulo, sanitizedDescripcion, sanitizedStatus], function(err: any) {
+        const sql = `INSERT INTO tasks (titulo, description, status) VALUES (?, ?, ?)`;
+        this.db.run(sql, [sanitizedTitulo, sanitizeddescription, sanitizedStatus], function(err: any) {
             if (err) {
                 res.status(400).json({ error: err.message });
                 return;
             } else {
                 res.status(201).json({ message: 'Tarea creada correctamente', id: this.lastID });
-                // Actualizar fila virtual
-                SocketClass.updateTasks(this.io);
-                console.log('Fila virtual actualizada');
+                
+                // Mandar socket
+                this.io?.emit('newTask', {
+                    task: {
+                        id: this.lastID,
+                        titulo: sanitizedTitulo,
+                        description: sanitizeddescription,
+                        status: sanitizedStatus,
+                        fechaCreacion: moment().format('YYYY-MM-DD HH:mm:ss'),
+                        fechaActualizacion: moment().format('YYYY-MM-DD HH:mm:ss')
+                    }
+                } as any);
                 return;
             }
         });
@@ -161,9 +190,15 @@ class Server {
                 return;
             } else {
                 res.status(201).json({ message: 'Tarea actualizada correctamente', id: id, status: sanitizedStatus });
-                // Actualizar fila virtual
-                SocketClass.updateTasks(this.io);
-                console.log('Fila virtual actualizada');
+
+                // Mandar socket
+                this.io?.emit('taskUpdated', {
+                    task: {
+                        id: id,
+                        status: sanitizedStatus,
+                        fechaActualizacion: moment().format('YYYY-MM-DD HH:mm:ss')
+                    }
+                } as any);
                 return;
             }
         });
@@ -197,9 +232,13 @@ class Server {
                 return;
             } else {
                 res.status(200).json({ message: 'Tarea eliminada correctamente', id: sanitizedId });
-                // Actualizar fila virtual
-                SocketClass.updateTasks(this.io);
-                console.log('Fila virtual actualizada');
+                // Mandar socket
+                this.io?.emit('taskDeleted', {
+                    task: {
+                        id: id,
+                        fechaActualizacion: moment().format('YYYY-MM-DD HH:mm:ss')
+                    }
+                } as any);
                 return;
             }
         });
@@ -225,7 +264,7 @@ class Server {
         this.db.run(`CREATE TABLE IF NOT EXISTS tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             titulo TEXT NOT NULL CHECK (length(titulo) <= 100),
-            descripcion TEXT CHECK (length(titulo) <= 500),
+            description TEXT CHECK (length(titulo) <= 500),
             status TEXT DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'en_proceso', 'completada')),
             fechaCreacion DATETIME DEFAULT CURRENT_TIMESTAMP,
             fechaActualizacion DATETIME DEFAULT CURRENT_TIMESTAMP
