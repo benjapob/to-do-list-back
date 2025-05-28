@@ -6,6 +6,7 @@ import socketIO from 'socket.io';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { TaskClass } from '@clases/tasks.class';
 const sqlite3 = require('sqlite3').verbose();
 
 // Cargar variables de entorno
@@ -34,32 +35,11 @@ class Server {
       },
     });
 
-    // Cuando se conecta un cliente, enviar las tareas en base
-    this.io.on("connection", (socket: {emit(arg0: string, arg1: string): unknown; id: any; on: (arg0: string, arg1: () => void) => void; }) => {
-      console.log("Usuario conectado:", socket.id);
-      const sql = `SELECT * FROM tasks`;
-      this.db.all(sql, [], (err:any, rows:any) => {
-          if (err) {
-              console.error('Error al obtener tareas:', err);
-              return;
-          }
-          this.io?.emit('tareasInicial', {
-              tasks: rows.map((row:any) => ({
-                  id: row.id,
-                  titulo: row.titulo,
-                  description: row.description,
-                  status: row.status,
-                  fechaCreacion: moment(row.fechaCreacion).format('YYYY-MM-DD HH:mm:ss'),
-                  fechaActualizacion: moment(row.fechaActualizacion).format('YYYY-MM-DD HH:mm:ss')
-              }))
-          } as any);
-      });
-    });
-
     this.configureMiddleware();
     this.configureRoutes();
     this.configureDB();
     this.configureErrorHandling();
+    TaskClass.initSocket(this.io, this.db);
   }
 
   private configureMiddleware() {
@@ -100,13 +80,14 @@ class Server {
   private configureRoutes() {
     // Obtener todas las tareas
     this.app.get('/tasks', (req: Request, res: Response) => {
-      const sql = `SELECT * FROM tasks`;
-      this.db.all(sql, [], (err:any, rows:any) => {
-          if (err) {
-              return res.status(400).json({ error: err.message });
-          }
-          res.json(rows);
-      });
+      TaskClass.getTasks(this.io, this.db)
+        .then((tasks: any) => {          
+          res.status(200).json(tasks);
+        })
+        .catch((err: any) => {
+          console.error('Error al obtener las tareas:', err);
+          res.status(500).json({ error: 'Error interno del servidor' });
+        });
     });
 
     // Crear una nueva tarea
@@ -131,31 +112,31 @@ class Server {
         }
         // Sanitizar entradas
         const sanitizedTitulo = this.sanitizeInput(titulo);
-        const sanitizeddescription = this.sanitizeInput(description);
+        const sanitizedDescription = this.sanitizeInput(description);
         const sanitizedStatus = this.sanitizeInput(status);
+
         // Insertar la tarea en la base de datos
-        const sql = `INSERT INTO tasks (titulo, description, status) VALUES (?, ?, ?)`;
-        this.db.run(sql, [sanitizedTitulo, sanitizeddescription, sanitizedStatus], function(err: any) {
-            if (err) {
-                res.status(400).json({ error: err.message });
-                return;
-            } else {
-                res.status(201).json({ message: 'Tarea creada correctamente', id: this.lastID });
-                
-                // Mandar socket
-                this.io?.emit('newTask', {
-                    task: {
-                        id: this.lastID,
-                        titulo: sanitizedTitulo,
-                        description: sanitizeddescription,
-                        status: sanitizedStatus,
-                        fechaCreacion: moment().format('YYYY-MM-DD HH:mm:ss'),
-                        fechaActualizacion: moment().format('YYYY-MM-DD HH:mm:ss')
-                    }
-                } as any);
-                return;
-            }
+        TaskClass.addTask(this.io, this.db, {
+          sanitizedTitulo,
+          sanitizedDescription,
+          sanitizedStatus: sanitizedStatus || 'pendiente'
+        })
+        .then((taskId: number) => {
+          res.status(201).json({
+            message: 'Tarea creada correctamente',
+            id: taskId,
+            titulo: sanitizedTitulo,
+            description: sanitizedDescription,
+            status: sanitizedStatus || 'pendiente',
+            fechaCreacion: moment().format('YYYY-MM-DD HH:mm:ss'),
+            fechaActualizacion: moment().format('YYYY-MM-DD HH:mm:ss')
+          });
+        })
+        .catch((err: any) => {
+          console.error('Error al crear la tarea:', err);
+          res.status(500).json({ error: 'Error interno del servidor' });
         });
+
       } catch (error) {
         // Manejo de errores
         console.error(error);
@@ -180,27 +161,25 @@ class Server {
         }
         const sanitizedStatus = this.sanitizeInput(status);
         // Insertar la tarea en la base de datos
-        const sql = `UPDATE tasks SET status = ? WHERE id = ?`;
-        this.db.run(sql, [sanitizedStatus, id], function(err: any) {
-            if (err) {
-                res.status(400).json({ error: err.message });
-                return;
-            } else if (this.changes === 0) {
-                res.status(404).json({ error: 'Tarea no encontrada' });
-                return;
-            } else {
-                res.status(201).json({ message: 'Tarea actualizada correctamente', id: id, status: sanitizedStatus });
-
-                // Mandar socket
-                this.io?.emit('taskUpdated', {
-                    task: {
-                        id: id,
-                        status: sanitizedStatus,
-                        fechaActualizacion: moment().format('YYYY-MM-DD HH:mm:ss')
-                    }
-                } as any);
-                return;
-            }
+        TaskClass.updateTask(this.io, this.db, {
+          id: this.sanitizeInput(id as string),
+          sanitizedStatus
+        })
+        .then((changes: number) => {
+          if (changes === 0) {
+            res.status(404).json({ error: 'Tarea no encontrada' });
+            return;
+          }
+          res.status(200).json({
+            message: 'Tarea actualizada correctamente',
+            id: this.sanitizeInput(id as string),
+            status: sanitizedStatus,
+            fechaActualizacion: moment().format('YYYY-MM-DD HH:mm:ss')
+          });
+        })
+        .catch((err: any) => {
+          console.error('Error al actualizar la tarea:', err);
+          res.status(500).json({ error: 'Error interno del servidor' });
         });
         
       } catch (error) {
@@ -222,25 +201,17 @@ class Server {
         // Sanitizar entrada
         const sanitizedId = this.sanitizeInput(id as string);
         // Eliminar la tarea de la base de datos
-        const sql = `DELETE FROM tasks WHERE id = ?`;
-        this.db.run(sql, [sanitizedId], function(err: any) {
-            if (err) {
-                res.status(400).json({ error: err.message });
-                return;
-            } else if (this.changes === 0) {
-                res.status(404).json({ error: 'Tarea no encontrada' });
-                return;
-            } else {
-                res.status(200).json({ message: 'Tarea eliminada correctamente', id: sanitizedId });
-                // Mandar socket
-                this.io?.emit('taskDeleted', {
-                    task: {
-                        id: id,
-                        fechaActualizacion: moment().format('YYYY-MM-DD HH:mm:ss')
-                    }
-                } as any);
-                return;
-            }
+        TaskClass.deleteTask(this.io, this.db, sanitizedId)
+        .then((changes: number) => {
+          if (changes === 0) {
+            res.status(404).json({ error: 'Tarea no encontrada' });
+            return;
+          }
+          res.status(200).json({ message: 'Tarea eliminada correctamente', id: sanitizedId });
+        })
+        .catch((err: any) => {
+          console.error('Error al eliminar la tarea:', err);
+          res.status(500).json({ error: 'Error interno del servidor' });
         });
       } catch (error) {
           console.error(error);
