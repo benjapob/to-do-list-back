@@ -6,9 +6,8 @@ import socketIO from 'socket.io';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { TaskClass } from '@clases/tasks.class';
-import { open } from 'sqlite';
-import sqlite3 from 'sqlite3';
+import { TaskClass } from './classes/tasks.class';
+import { initDatabase } from './database/db';
 
 // Cargar variables de entorno
 dotenv.config();
@@ -147,9 +146,9 @@ class Server {
     });
 
     // Actualizar el estado de una tarea
-    this.app.put('/tasks', (req: Request, res: Response) => {
+    this.app.put('/tasks/:id', (req: Request, res: Response) => {
       try {
-        const id = req.query.id;
+        const id = req.params.id;
         const {status} = req.body;
         // Validar campos requeridos
         if (!id) {
@@ -190,10 +189,9 @@ class Server {
     });
     
     // Eliminar un turno
-    this.app.delete('/tasks', (req: Request, res: Response) => {
+    this.app.delete('/tasks/:id', (req: Request, res: Response) => {
       try {
-        // Eliminar un turno
-        const id = req.query.id;
+        const id = req.params.id;
         // Validar campos requeridos
         if (!id) {
             res.status(400).json({ error: 'El ID es requerido' });
@@ -222,38 +220,8 @@ class Server {
   }
 
   private async configureDB() {
-    // Conectar a la base de datos SQLite
     try {
-
-      const db = await open({
-          filename: './database.db', // Archivo de la base de datos
-          driver: sqlite3.Database
-      });
-
-      // Crear la tabla tasks si no existe
-      await db.exec(`CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            titulo TEXT NOT NULL CHECK (length(titulo) <= 100),
-            description TEXT CHECK (length(titulo) <= 500),
-            status TEXT DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'en_proceso', 'completada')),
-            fechaCreacion DATETIME DEFAULT CURRENT_TIMESTAMP,
-            fechaActualizacion DATETIME DEFAULT CURRENT_TIMESTAMP
-        )`);
-
-      // Crear el trigger para actualizar la fecha de modificación
-      await db.exec(`CREATE TRIGGER IF NOT EXISTS actualizar_fecha
-            AFTER UPDATE ON tasks
-            FOR EACH ROW
-            BEGIN
-                UPDATE tasks
-                SET fechaActualizacion = CURRENT_TIMESTAMP
-                WHERE id = OLD.id;
-            END;`);
-
-      // Asignar la base de datos a la instancia
-      this.db = db; 
-      console.log('Conexión a la base de datos establecida correctamente');
-      
+      this.db = await initDatabase(); // Usar initDatabase de db.ts
     } catch (error) {
       console.error('Error al conectar a la base de datos:', error);
       throw error;
