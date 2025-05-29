@@ -100,15 +100,6 @@ Dado que no hay frontend, puedes probar la funcionalidad WebSocket usando un cli
      - `GET /tasks`: Dispara un evento `tasks` con la lista de tareas.
    - En tu cliente WebSocket, escucha estos eventos (`newTask`, `taskUpdated`, `taskDeleted`, `tasks`) para ver los datos emitidos.
 
-### Flujo de Prueba de Ejemplo
-1. Inicia el servidor (`npm run dev`).
-2. Abre `index.html` en un navegador o conéctate vía Postman WebSocket.
-3. Envía una solicitud `POST /tasks` usando curl o Postman:
-   ```bash
-   curl -X POST http://localhost:3000/tasks -H "Content-Type: application/json" -d '{"titulo":"Tarea de Prueba","description":"Test","status":"pendiente"}'
-   ```
-4. Verifica que el evento `newTask` aparezca en tu cliente WebSocket o navegador.
-
 ## Decisiones de Diseño
 - **SQLite como Base de Datos**: Elegido por su simplicidad, ligereza y adecuación para aplicaciones de tamaño pequeño a mediano. Se usó el paquete `sqlite` en lugar de `sqlite3` directamente para aprovechar el soporte nativo de promesas, lo que simplifica las operaciones asíncronas y evita problemas de promisificación manual.
 - **Express y TypeScript**: Express ofrece un framework robusto para construir APIs RESTful, mientras que TypeScript garantiza seguridad de tipos y mejor mantenibilidad. Se definieron interfaces (por ejemplo, `Task`) para mejorar la legibilidad y detectar errores en tiempo de compilación.
