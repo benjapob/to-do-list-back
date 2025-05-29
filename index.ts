@@ -7,7 +7,8 @@ import dotenv from 'dotenv';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { TaskClass } from '@clases/tasks.class';
-const sqlite3 = require('sqlite3').verbose();
+import { open } from 'sqlite';
+import sqlite3 from 'sqlite3';
 
 // Cargar variables de entorno
 dotenv.config();
@@ -220,45 +221,43 @@ class Server {
     });
   }
 
-  private configureDB() {
-    // Aquí puedes configurar tu conexión a la base de datos
-    this.db = new sqlite3.Database('./database.db', (err: { message: any; }) => {
-        if (err) {
-            console.error('Error al conectar con la base de datos:', err.message);
-        } else {
-            console.log('Conectado a la base de datos SQLite.');
-        }
-    });
+  private async configureDB() {
+    // Conectar a la base de datos SQLite
+    try {
 
-    // Crear la tabla si no existe
-    this.db.serialize(() => {
-        this.db.run(`CREATE TABLE IF NOT EXISTS tasks (
+      const db = await open({
+          filename: './database.db', // Archivo de la base de datos
+          driver: sqlite3.Database
+      });
+
+      // Crear la tabla tasks si no existe
+      await db.exec(`CREATE TABLE IF NOT EXISTS tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             titulo TEXT NOT NULL CHECK (length(titulo) <= 100),
             description TEXT CHECK (length(titulo) <= 500),
             status TEXT DEFAULT 'pendiente' CHECK (status IN ('pendiente', 'en_proceso', 'completada')),
             fechaCreacion DATETIME DEFAULT CURRENT_TIMESTAMP,
             fechaActualizacion DATETIME DEFAULT CURRENT_TIMESTAMP
-        )`, (err: any) => {
-            if (err) {
-                console.error('Error al crear la tabla tasks:', err.message);
-            }
-        });
-    });
+        )`);
 
-    // Crear el trigger para actualizar la fecha de modificación
-    this.db.run(`CREATE TRIGGER IF NOT EXISTS actualizar_fecha
+      // Crear el trigger para actualizar la fecha de modificación
+      await db.exec(`CREATE TRIGGER IF NOT EXISTS actualizar_fecha
             AFTER UPDATE ON tasks
             FOR EACH ROW
             BEGIN
                 UPDATE tasks
                 SET fechaActualizacion = CURRENT_TIMESTAMP
                 WHERE id = OLD.id;
-            END;`, (err:any) => {
-        if (err) {
-            console.error('Error al crear el trigger:', err.message);
-        }
-    });
+            END;`);
+
+      // Asignar la base de datos a la instancia
+      this.db = db; 
+      console.log('Conexión a la base de datos establecida correctamente');
+      
+    } catch (error) {
+      console.error('Error al conectar a la base de datos:', error);
+      throw error;
+    }
   }
 
   private configureErrorHandling() {
