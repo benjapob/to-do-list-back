@@ -71,8 +71,8 @@ Este es un backend en Node.js construido con TypeScript, Express y SQLite para g
 4. **Endpoints de la API**:
    - `GET /tasks`: Obtiene todas las tareas.
    - `POST /tasks`: Crea una nueva tarea (requiere `titulo` en el cuerpo; `description` y `status` son opcionales).
-   - `PUT /tasks?id=<taskId>`: Actualiza el estado de una tarea (requiere `id` en la query y `status` en el cuerpo).
-   - `DELETE /tasks?id=<taskId>`: Elimina una tarea (requiere `id` en la query).
+   - `PUT /tasks/:id`: Actualiza el estado de una tarea (requiere `id` en la query y `status` en el cuerpo).
+   - `DELETE /tasks/:id`: Elimina una tarea (requiere `id` en la query).
 
    Ejemplo de cuerpo para `POST /tasks`:
    ```json
@@ -95,8 +95,8 @@ Dado que no hay frontend, puedes probar la funcionalidad WebSocket usando un cli
 2. **Probar eventos WebSocket**:
    - Realiza solicitudes a la API para disparar eventos WebSocket:
      - `POST /tasks`: Dispara un evento `newTask` con la tarea creada.
-     - `PUT /tasks?id=<taskId>`: Dispara un evento `taskUpdated` con la tarea actualizada.
-     - `DELETE /tasks?id=<taskId>`: Dispara un evento `taskDeleted` con el ID de la tarea eliminada.
+     - `PUT /tasks/:id`: Dispara un evento `taskUpdated` con la tarea actualizada.
+     - `DELETE /tasks/:id`: Dispara un evento `taskDeleted` con el ID de la tarea eliminada.
      - `GET /tasks`: Dispara un evento `tasks` con la lista de tareas.
    - En tu cliente WebSocket, escucha estos eventos (`newTask`, `taskUpdated`, `taskDeleted`, `tasks`) para ver los datos emitidos.
 
